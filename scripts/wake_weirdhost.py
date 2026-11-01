@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Weirdhost 唤醒 + sing-box 代理 + 强化 Turnstile 点击
+Weirdhost 服务器唤醒
+支持 Mihomo/SS 代理 + Turnstile 强化点击
 """
 
 import os
@@ -31,11 +32,10 @@ DEFAULT_COOKIE = "remember_web_59ba36addc2b2f9401580f014c7f58ea4e30989d=eyJpdiI6
 
 COOKIE_RAW = get_env("WEIRDHOST_COOKIE", DEFAULT_COOKIE)
 IS_PROXY = get_env("IS_PROXY", "false").lower() == "true"
-PROXY_SERVER = get_env("PROXY_SERVER", "http://127.0.0.1:1080")
+PROXY_SERVER = get_env("PROXY_SERVER", "http://127.0.0.1:7890")
 
 WAKE_BUTTON_TEXTS = ["지금 깨우기", "깨우기", "Wake", "Start"]
 
-# Turnstile 坐标探测 JS（来自 Bothosting 思路）
 TS_COORDS_JS = """
 function findWidget(root) {
     var els = root.querySelectorAll(
@@ -141,7 +141,6 @@ def _xdotool_click(x: int, y: int):
 
 
 def click_turnstile(sb) -> bool:
-    # 1) SeleniumBase 自带
     try:
         sb.uc_gui_click_captcha()
         time.sleep(2)
@@ -150,7 +149,6 @@ def click_turnstile(sb) -> bool:
     except Exception as e:
         print(f"[调试] uc_gui_click_captcha: {e}")
 
-    # 2) 坐标 + xdotool
     coords = js(sb, TS_COORDS_JS, None)
     if not coords:
         print("[调试] 未找到 Turnstile 坐标")
@@ -222,7 +220,7 @@ def main():
         print(f"[信息] 使用代理: {PROXY_SERVER}")
         sb_kwargs["proxy"] = PROXY_SERVER
     else:
-        print("[信息] 未启用代理")
+        print("[信息] 未启用代理（直连）")
 
     with SB(**sb_kwargs) as sb:
         try:
@@ -250,7 +248,6 @@ def main():
             sb.uc_open_with_reconnect(SERVER_URL, reconnect_time=6)
             random_delay(3, 5)
 
-            # 强化过 CF
             if is_cloudflare(sb):
                 print("[信息] 检测到 Cloudflare，开始处理 Turnstile...")
                 ok = solve_turnstile(sb, timeout=80)
@@ -285,11 +282,9 @@ def main():
             if is_cloudflare(sb):
                 sb.save_screenshot("cf_blocked.png")
                 print("❌ 仍被 Cloudflare 拦截")
-                print("   当前节点是机房 IP，CF 可能持续出验证码。")
-                print("   建议换住宅代理 / 更干净的节点后再试。")
+                print("   可换 US-Fixed / 其他节点，或改用本机定时 / 自托管 Runner")
                 sys.exit(4)
 
-            # 点击唤醒
             clicked = False
             for text in WAKE_BUTTON_TEXTS:
                 xpath = f"//button[contains(normalize-space(.), '{text}')]"

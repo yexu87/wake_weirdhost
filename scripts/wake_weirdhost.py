@@ -2,7 +2,6 @@
 # -*- coding: utf-8 -*-
 """
 Weirdhost 服务器唤醒脚本（支持 Telegram 通知）
-适用于 GitHub Actions 定时运行
 """
 
 import os
@@ -17,15 +16,24 @@ from datetime import datetime
 from seleniumbase import SB
 
 # ==================== 配置 ====================
-# 空字符串也当作未设置，避免 GitHub Actions 传入空值覆盖默认值
-SERVER_ID = (os.environ.get("SERVER_ID") or "2932f1f7").strip()
+def get_env(key: str, default: str = "") -> str:
+    """安全读取环境变量，空字符串也返回默认值"""
+    val = os.environ.get(key)
+    if val is None or str(val).strip() == "":
+        return default
+    return str(val).strip()
+
+SERVER_ID = get_env("SERVER_ID", "2932f1f7")
 SERVER_URL = f"https://hub.weirdhost.xyz/server/{SERVER_ID}"
 DOMAIN = "hub.weirdhost.xyz"
 
-# 不要在这里写真实 Cookie！只通过 Secrets 传入
-COOKIE_RAW = (os.environ.get("WEIRDHOST_COOKIE") or "remember_web_59ba36addc2b2f9401580f014c7f58ea4e30989d=eyJpdiI6IlJZLzFDUnFKUnpQanJtQ1B6M2xMeVE9PSIsInZhbHVlIjoiNmdmQVYvOFduMy8rWjFuYlVUam95d3JycUxleFJLTHlDVHZydngvRjMwS0lSVG9wRDlZWjFha2QrVkkvaDNnNDFBU2lXeVF2QzlqYXpuSXNXdml0Nk9zdDlKOHZsUDBlUWkvanF5dWpUYmZHZ0JLUU5XWHRFQ2JFS1BGMVhKaHNaVUczOTAzb1FWZTl3R21wVGZJbkdRMXZHbFRFMy9nUjJoSmJrVTZtM3k3S2FscmdQMkorcGJUZzNOdFBUalFvczVqRFMvUC8raXd6cmx5QkMyYzBWNHgvejd4akNyLzRoZi9UV0VndmlpRT0iLCJtYWMiOiIxYmNhM2IyN2Q0ZTA4NWIzZTNlYzhhYjYzMDE4MjBkNTc1N2ZlY2Y5NWQwMjE2YmJkYTYyZjNkYjM4YjRkZWQzIiwidGFnIjoiIn0%3D").strip()
-TG_BOT_TOKEN = (os.environ.get("TG_BOT_TOKEN") or "").strip()
-TG_CHAT_ID = (os.environ.get("TG_CHAT_ID") or "").strip()
+# 这里写你的 Cookie（临时方案，先保证能跑通）
+# 跑通以后再改回只从 Secrets 读取
+DEFAULT_COOKIE = "remember_web_59ba36addc2b2f9401580f014c7f58ea4e30989d=eyJpdiI6IlJZLzFDUnFKUnpQanJtQ1B6M2xMeVE9PSIsInZhbHVlIjoiNmdmQVYvOFduMy8rWjFuYlVUam95d3JycUxleFJLTHlDVHZydngvRjMwS0lSVG9wRDlZWjFha2QrVkkvaDNnNDFBU2lXeVF2QzlqYXpuSXNXdml0Nk9zdDlKOHZsUDBlUWkvanF5dWpUYmZHZ0JLUU5XWHRFQ2JFS1BGMVhKaHNaVUczOTAzb1FWZTl3R21wVGZJbkdRMXZHbFRFMy9nUjJoSmJrVTZtM3k3S2FscmdQMkorcGJUZzNOdFBUalFvczVqRFMvUC8raXd6cmx5QkMyYzBWNHgvejd4akNyLzRoZi9UV0VndmlpRT0iLCJtYWMiOiIxYmNhM2IyN2Q0ZTA4NWIzZTNlYzhhYjYzMDE4MjBkNTc1N2ZlY2Y5NWQwMjE2YmJkYTYyZjNkYjM4YjRkZWQzIiwidGFnIjoiIn0%3D"
+
+COOKIE_RAW = get_env("WEIRDHOST_COOKIE", DEFAULT_COOKIE)
+TG_BOT_TOKEN = get_env("TG_BOT_TOKEN", "")
+TG_CHAT_ID = get_env("TG_CHAT_ID", "")
 
 WAKE_BUTTON_TEXTS = ["지금 깨우기", "깨우기", "Wake", "Start"]
 
@@ -66,6 +74,8 @@ def main():
     start_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[信息] 开始时间: {start_time}")
     print(f"[信息] 目标服务器: {SERVER_URL}")
+    print(f"[调试] SERVER_ID = [{SERVER_ID}]")
+    print(f"[调试] COOKIE_RAW 前30字符 = [{COOKIE_RAW[:30] if COOKIE_RAW else '空'}]")
 
     if not COOKIE_RAW:
         msg = "❌ <b>Weirdhost 唤醒失败</b>\n原因: 未设置 WEIRDHOST_COOKIE"
@@ -80,12 +90,13 @@ def main():
         notify(msg)
         sys.exit(1)
 
+    print(f"[调试] Cookie 名称 = {name}")
+
     success = False
     result_msg = ""
 
     try:
         with SB(uc=True, headless=True, locale_code="ko") as sb:
-            # 1. 打开域名并注入 Cookie
             sb.open(f"https://{DOMAIN}/")
             random_delay()
 
@@ -99,11 +110,9 @@ def main():
             })
             print("[信息] Cookie 已注入")
 
-            # 2. 进入服务器页面
             sb.open(SERVER_URL)
             random_delay(2.5, 4)
 
-            # 处理 Cloudflare
             for _ in range(12):
                 src = sb.get_page_source().lower()
                 if "turnstile" in src or "cf-turnstile" in src:
@@ -114,14 +123,12 @@ def main():
 
             page = sb.get_page_source()
 
-            # 3. 判断状态
             is_sleeping = any(k in page for k in ["수면중", "지금 깨우기", "서버가 수면"])
             if is_sleeping:
                 print("[信息] 服务器处于休眠状态，准备唤醒")
             else:
                 print("[信息] 未检测到休眠遮罩，服务器可能已在线")
 
-            # 4. 点击唤醒按钮
             clicked = False
             for text in WAKE_BUTTON_TEXTS:
                 try:
@@ -135,7 +142,6 @@ def main():
                     continue
 
             if not clicked:
-                # 兜底
                 try:
                     sb.click("button.bg-blue-500, button[class*='blue']")
                     clicked = True
@@ -155,7 +161,6 @@ def main():
                 notify(result_msg)
                 sys.exit(2)
 
-            # 5. 等待结果
             random_delay(4, 7)
             page2 = sb.get_page_source()
 

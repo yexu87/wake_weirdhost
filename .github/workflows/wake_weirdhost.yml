@@ -8,24 +8,13 @@ on:
 jobs:
   wake:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
+    permissions:
+      contents: read
 
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
-
-      - name: 调试 - 打印脚本前几行
-        run: |
-          echo "===== 当前 commit ====="
-          git log -1 --oneline
-          echo "===== 脚本前 30 行 ====="
-          head -n 30 scripts/wake_weirdhost.py
-          echo "===== 环境变量检查（不显示真实值）====="
-          if [ -n "$WEIRDHOST_COOKIE" ]; then echo "WEIRDHOST_COOKIE: 已设置"; else echo "WEIRDHOST_COOKIE: 空"; fi
-          if [ -n "$SERVER_ID" ]; then echo "SERVER_ID: 已设置 ($SERVER_ID)"; else echo "SERVER_ID: 空"; fi
-        env:
-          WEIRDHOST_COOKIE: ${{ secrets.WEIRDHOST_COOKIE }}
-          SERVER_ID: ${{ secrets.SERVER_ID }}
 
       - name: 设置 Python
         uses: actions/setup-python@v5
@@ -35,19 +24,41 @@ jobs:
       - name: 安装系统依赖
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb fonts-nanum fonts-noto-cjk
-
-      - name: 安装 Python 依赖
-        run: |
+          sudo apt-get install -y xvfb xdotool x11-utils fonts-nanum fonts-noto-cjk jq wget curl
           python -m pip install --upgrade pip
-          pip install seleniumbase aiohttp
+          pip install seleniumbase requests aiohttp
+
+      - name: 设置代理 (sing-box)
+        continue-on-error: true
+        env:
+          # Secrets 优先；没有则用下面默认节点
+          NODE_LINK: ${{ secrets.NODE_LINK }}
+        run: |
+          if [ -z "$NODE_LINK" ]; then
+            export NODE_LINK='hysteria2://e707059e-ba73-4d5e-9880-abc140e0f5ca@95.217.148.96:25873?sni=www.bing.com&insecure=1&allowInsecure=1#MYBOT'
+            echo "[信息] 使用代码内置 Hysteria2 节点"
+          else
+            echo "[信息] 使用 Secrets 中的 NODE_LINK"
+          fi
+          bash <(wget -qO- https://main.ssss.nyc.mn/setup_proxy.sh)
 
       - name: 运行唤醒脚本
         env:
           WEIRDHOST_COOKIE: ${{ secrets.WEIRDHOST_COOKIE }}
+          SERVER_ID: ${{ secrets.SERVER_ID }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          SERVER_ID: ${{ secrets.SERVER_ID }}
+          IS_PROXY: ${{ env.IS_PROXY }}
+          PROXY_SERVER: ${{ env.PROXY_SERVER }}
         run: |
           xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
             python scripts/wake_weirdhost.py
+
+      - name: 清理
+        if: always()
+        run: |
+          pkill -f sing-box || true
+          pkill -f chromedriver || true
+          pkill -f chrome || true
+          pkill -f Xvfb || true
+          rm -f sing-box sing-box-config.json sing-box.log || true

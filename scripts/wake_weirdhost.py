@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Weirdhost 服务器唤醒脚本（支持 Telegram 通知）
+Weirdhost 服务器唤醒脚本
 """
 
 import os
@@ -15,20 +15,19 @@ from datetime import datetime
 
 from seleniumbase import SB
 
-# ==================== 配置 ====================
 def get_env(key: str, default: str = "") -> str:
-    """安全读取环境变量，空字符串也返回默认值"""
+    """空字符串或纯空格都视为未设置，返回默认值"""
     val = os.environ.get(key)
-    if val is None or str(val).strip() == "":
+    if val is None or not str(val).strip():
         return default
     return str(val).strip()
 
+# ==================== 配置 ====================
 SERVER_ID = get_env("SERVER_ID", "2932f1f7")
 SERVER_URL = f"https://hub.weirdhost.xyz/server/{SERVER_ID}"
 DOMAIN = "hub.weirdhost.xyz"
 
-# 这里写你的 Cookie（临时方案，先保证能跑通）
-# 跑通以后再改回只从 Secrets 读取
+# 临时写死 Cookie，先保证能跑通（跑通后再改成只从 Secrets 读）
 DEFAULT_COOKIE = "remember_web_59ba36addc2b2f9401580f014c7f58ea4e30989d=eyJpdiI6IlJZLzFDUnFKUnpQanJtQ1B6M2xMeVE9PSIsInZhbHVlIjoiNmdmQVYvOFduMy8rWjFuYlVUam95d3JycUxleFJLTHlDVHZydngvRjMwS0lSVG9wRDlZWjFha2QrVkkvaDNnNDFBU2lXeVF2QzlqYXpuSXNXdml0Nk9zdDlKOHZsUDBlUWkvanF5dWpUYmZHZ0JLUU5XWHRFQ2JFS1BGMVhKaHNaVUczOTAzb1FWZTl3R21wVGZJbkdRMXZHbFRFMy9nUjJoSmJrVTZtM3k3S2FscmdQMkorcGJUZzNOdFBUalFvczVqRFMvUC8raXd6cmx5QkMyYzBWNHgvejd4akNyLzRoZi9UV0VndmlpRT0iLCJtYWMiOiIxYmNhM2IyN2Q0ZTA4NWIzZTNlYzhhYjYzMDE4MjBkNTc1N2ZlY2Y5NWQwMjE2YmJkYTYyZjNkYjM4YjRkZWQzIiwidGFnIjoiIn0%3D"
 
 COOKIE_RAW = get_env("WEIRDHOST_COOKIE", DEFAULT_COOKIE)
@@ -37,7 +36,6 @@ TG_CHAT_ID = get_env("TG_CHAT_ID", "")
 
 WAKE_BUTTON_TEXTS = ["지금 깨우기", "깨우기", "Wake", "Start"]
 
-# ==================== 工具函数 ====================
 def parse_cookie(raw: str):
     raw = raw.strip()
     if "-----" in raw:
@@ -69,31 +67,23 @@ async def tg_send(text: str):
 def notify(text: str):
     asyncio.run(tg_send(text))
 
-# ==================== 主逻辑 ====================
 def main():
     start_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[信息] 开始时间: {start_time}")
     print(f"[信息] 目标服务器: {SERVER_URL}")
-    print(f"[调试] SERVER_ID = [{SERVER_ID}]")
-    print(f"[调试] COOKIE_RAW 前30字符 = [{COOKIE_RAW[:30] if COOKIE_RAW else '空'}]")
+    print(f"[调试] SERVER_ID=[{SERVER_ID}]")
+    print(f"[调试] COOKIE长度={len(COOKIE_RAW)}")
 
     if not COOKIE_RAW:
-        msg = "❌ <b>Weirdhost 唤醒失败</b>\n原因: 未设置 WEIRDHOST_COOKIE"
-        print(msg)
-        notify(msg)
+        print("❌ 未设置 WEIRDHOST_COOKIE")
         sys.exit(1)
 
     name, value = parse_cookie(COOKIE_RAW)
     if not name or not name.startswith("remember_web"):
-        msg = "❌ <b>Weirdhost 唤醒失败</b>\n原因: Cookie 格式错误（必须以 remember_web_ 开头）"
-        print(msg)
-        notify(msg)
+        print("❌ Cookie 格式错误")
         sys.exit(1)
 
-    print(f"[调试] Cookie 名称 = {name}")
-
-    success = False
-    result_msg = ""
+    print(f"[调试] Cookie名称={name}")
 
     try:
         with SB(uc=True, headless=True, locale_code="ko") as sb:
@@ -122,7 +112,6 @@ def main():
                     break
 
             page = sb.get_page_source()
-
             is_sleeping = any(k in page for k in ["수면중", "지금 깨우기", "서버가 수면"])
             if is_sleeping:
                 print("[信息] 服务器处于休眠状态，准备唤醒")
@@ -151,53 +140,20 @@ def main():
 
             if not clicked:
                 sb.save_screenshot("wake_fail.png")
-                result_msg = (
-                    f"❌ <b>Weirdhost 唤醒失败</b>\n"
-                    f"服务器: <code>{SERVER_ID}</code>\n"
-                    f"原因: 找不到「지금 깨우기」按钮\n"
-                    f"时间: {start_time}"
-                )
-                print(result_msg)
-                notify(result_msg)
+                print("❌ 找不到唤醒按钮")
                 sys.exit(2)
 
             random_delay(4, 7)
             page2 = sb.get_page_source()
 
             if "수면중" not in page2 and "지금 깨우기" not in page2:
-                success = True
-                result_msg = (
-                    f"✅ <b>Weirdhost 唤醒成功</b>\n"
-                    f"服务器: <code>{SERVER_ID}</code>\n"
-                    f"时间: {start_time}\n"
-                    f"状态: 休眠遮罩已消失，服务器正在启动"
-                )
+                print("✅ 唤醒成功，休眠遮罩已消失")
             else:
-                result_msg = (
-                    f"⚠️ <b>Weirdhost 唤醒结果不确定</b>\n"
-                    f"服务器: <code>{SERVER_ID}</code>\n"
-                    f"时间: {start_time}\n"
-                    f"状态: 已点击按钮，但遮罩仍在（可能需要更长时间）"
-                )
-
-            print(result_msg)
-            notify(result_msg)
+                print("⚠️ 已点击按钮，但遮罩可能还在（需要更长时间）")
 
     except Exception as e:
-        result_msg = (
-            f"❌ <b>Weirdhost 唤醒异常</b>\n"
-            f"服务器: <code>{SERVER_ID}</code>\n"
-            f"错误: <code>{str(e)[:200]}</code>\n"
-            f"时间: {start_time}"
-        )
-        print(result_msg)
-        notify(result_msg)
+        print(f"❌ 异常: {e}")
         sys.exit(3)
-
-    if success:
-        print("[完成] 唤醒成功")
-    else:
-        print("[完成] 已执行，结果见上方通知")
 
 if __name__ == "__main__":
     main()

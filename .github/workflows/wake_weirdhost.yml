@@ -3,7 +3,6 @@ name: Weirdhost 服务器唤醒
 on:
   schedule:
     # 每天 UTC 00:30 和 12:30 各跑一次（对应北京时间 08:30 和 20:30）
-    # 可根据需要修改 cron
     - cron: '30 0,12 * * *'
   workflow_dispatch:   # 允许手动触发
 
@@ -36,7 +35,7 @@ jobs:
           WEIRDHOST_COOKIE: ${{ secrets.WEIRDHOST_COOKIE }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          SERVER_ID: ${{ secrets.SERVER_ID }}   # 可选，不填则用脚本默认值
+          SERVER_ID: ${{ secrets.SERVER_ID }}
         run: |
           xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
             python scripts/wake_weirdhost.py

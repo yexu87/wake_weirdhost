@@ -2,9 +2,8 @@ name: Weirdhost 服务器唤醒
 
 on:
   schedule:
-    # 每天 UTC 00:30 和 12:30 各跑一次（对应北京时间 08:30 和 20:30）
     - cron: '30 0,12 * * *'
-  workflow_dispatch:   # 允许手动触发
+  workflow_dispatch:
 
 jobs:
   wake:
@@ -14,6 +13,19 @@ jobs:
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
+
+      - name: 调试 - 打印脚本前几行
+        run: |
+          echo "===== 当前 commit ====="
+          git log -1 --oneline
+          echo "===== 脚本前 30 行 ====="
+          head -n 30 scripts/wake_weirdhost.py
+          echo "===== 环境变量检查（不显示真实值）====="
+          if [ -n "$WEIRDHOST_COOKIE" ]; then echo "WEIRDHOST_COOKIE: 已设置"; else echo "WEIRDHOST_COOKIE: 空"; fi
+          if [ -n "$SERVER_ID" ]; then echo "SERVER_ID: 已设置 ($SERVER_ID)"; else echo "SERVER_ID: 空"; fi
+        env:
+          WEIRDHOST_COOKIE: ${{ secrets.WEIRDHOST_COOKIE }}
+          SERVER_ID: ${{ secrets.SERVER_ID }}
 
       - name: 设置 Python
         uses: actions/setup-python@v5

@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Weirdhost 服务器唤醒（支持 sing-box / NODE_LINK 代理过 CF）
+Weirdhost 唤醒 + sing-box 代理 + 强化 Turnstile 点击
 """
 
 import os
 import sys
 import time
 import random
+import subprocess
 import requests
 from urllib.parse import unquote
 from datetime import datetime
@@ -34,6 +35,51 @@ PROXY_SERVER = get_env("PROXY_SERVER", "http://127.0.0.1:1080")
 
 WAKE_BUTTON_TEXTS = ["지금 깨우기", "깨우기", "Wake", "Start"]
 
+# Turnstile 坐标探测 JS（来自 Bothosting 思路）
+TS_COORDS_JS = """
+function findWidget(root) {
+    var els = root.querySelectorAll(
+        'iframe[src*="challenges.cloudflare.com"], .cf-turnstile, [id*="cf-chl"]');
+    for (var i = 0; i < els.length; i++) {
+        var r = els[i].getBoundingClientRect();
+        if (r.width > 50 && r.height > 20) return els[i];
+    }
+    var all = root.querySelectorAll('*');
+    for (var j = 0; j < all.length; j++) {
+        if (all[j].shadowRoot) {
+            var f = findWidget(all[j].shadowRoot);
+            if (f) return f;
+        }
+    }
+    return null;
+}
+function boxFromTokenInput() {
+    var el = document.querySelector('input[name="cf-turnstile-response"]');
+    var cur = el ? el.parentElement : null;
+    for (var k = 0; k < 6 && cur; k++) {
+        var r = cur.getBoundingClientRect();
+        if (r.width > 100 && r.width < 600 && r.height > 30 && r.height < 140) return cur;
+        cur = cur.parentElement;
+    }
+    return null;
+}
+var hit = findWidget(document) || boxFromTokenInput();
+if (!hit) return null;
+var hr = hit.getBoundingClientRect();
+return {cx: Math.round(hr.x + 30), cy: Math.round(hr.y + hr.height / 2)};
+"""
+
+TURNSTILE_TOKEN_JS = """
+try {
+  if (window.turnstile && window.turnstile.getResponse) {
+    var t = window.turnstile.getResponse();
+    if (t) return t;
+  }
+} catch (e) {}
+var el = document.querySelector('input[name="cf-turnstile-response"]');
+return el ? (el.value || '') : '';
+"""
+
 
 def parse_cookie(raw: str):
     raw = raw.strip()
@@ -47,6 +93,14 @@ def parse_cookie(raw: str):
 
 def random_delay(a=1.0, b=2.5):
     time.sleep(random.uniform(a, b))
+
+
+def js(sb, script, default=None):
+    try:
+        r = sb.execute_script(script)
+        return default if r is None else r
+    except Exception:
+        return default
 
 
 def get_current_ip(proxy: str = "") -> str:
@@ -67,9 +121,80 @@ def is_cloudflare(sb) -> bool:
         page = ""
     keys = [
         "just a moment", "잠시만 기다리", "checking your browser",
-        "cf-turnstile", "turnstile", "cloudflare", "attention required",
+        "cf-turnstile", "turnstile", "attention required",
     ]
     return any(k in title or k in page for k in keys)
+
+
+def _xdotool_click(x: int, y: int):
+    try:
+        subprocess.run(
+            ["xdotool", "mousemove", "--sync", str(x), str(y)],
+            timeout=3, stderr=subprocess.DEVNULL,
+        )
+        time.sleep(0.15)
+        subprocess.run(["xdotool", "click", "1"], timeout=2, stderr=subprocess.DEVNULL)
+        return True
+    except Exception as e:
+        print(f"[调试] xdotool 点击失败: {e}")
+        return False
+
+
+def click_turnstile(sb) -> bool:
+    # 1) SeleniumBase 自带
+    try:
+        sb.uc_gui_click_captcha()
+        time.sleep(2)
+        if js(sb, TURNSTILE_TOKEN_JS, ""):
+            return True
+    except Exception as e:
+        print(f"[调试] uc_gui_click_captcha: {e}")
+
+    # 2) 坐标 + xdotool
+    coords = js(sb, TS_COORDS_JS, None)
+    if not coords:
+        print("[调试] 未找到 Turnstile 坐标")
+        return False
+
+    try:
+        wi = js(
+            sb,
+            "return '' + (window.screenX||0) + '|' + (window.screenY||0) + '|' + "
+            "window.outerHeight + '|' + window.innerHeight;",
+            "0|0|800|768",
+        )
+        parts = str(wi).split("|")
+        sx, sy = int(parts[0] or 0), int(parts[1] or 0)
+        bar = int(parts[2] or 800) - int(parts[3] or 768)
+        ax = int(coords["cx"]) + sx
+        ay = int(coords["cy"]) + sy + max(bar, 0)
+        print(f"[信息] xdotool 点击 Turnstile ({ax}, {ay})")
+        _xdotool_click(ax, ay)
+        time.sleep(3)
+        return True
+    except Exception as e:
+        print(f"[调试] 坐标点击失败: {e}")
+        return False
+
+
+def solve_turnstile(sb, timeout=75) -> bool:
+    deadline = time.time() + timeout
+    clicks = 0
+    next_click = time.time() + 3
+    while time.time() < deadline:
+        if not is_cloudflare(sb):
+            return True
+        token = js(sb, TURNSTILE_TOKEN_JS, "")
+        if token:
+            print("[信息] 已获取 Turnstile token")
+            return True
+        if time.time() >= next_click:
+            clicks += 1
+            print(f"[信息] 第 {clicks} 次尝试点击 Turnstile...")
+            click_turnstile(sb)
+            next_click = time.time() + 8 + random.uniform(0, 2)
+        time.sleep(2)
+    return (not is_cloudflare(sb)) or bool(js(sb, TURNSTILE_TOKEN_JS, ""))
 
 
 def main():
@@ -93,12 +218,11 @@ def main():
         "locale_code": "ko",
         "maximize": True,
     }
-
     if IS_PROXY:
         print(f"[信息] 使用代理: {PROXY_SERVER}")
         sb_kwargs["proxy"] = PROXY_SERVER
     else:
-        print("[信息] 未启用代理（直连，易被 CF 拦截）")
+        print("[信息] 未启用代理")
 
     with SB(**sb_kwargs) as sb:
         try:
@@ -109,8 +233,8 @@ def main():
                 print(f"[警告] 获取出口 IP 失败: {e}")
 
             print("[信息] 打开域名并注入 Cookie...")
-            sb.uc_open_with_reconnect(f"https://{DOMAIN}/", reconnect_time=4)
-            random_delay()
+            sb.uc_open_with_reconnect(f"https://{DOMAIN}/", reconnect_time=5)
+            random_delay(2, 3)
 
             sb.driver.add_cookie({
                 "name": name,
@@ -123,26 +247,25 @@ def main():
             print("[信息] Cookie 已注入")
 
             print("[信息] 打开服务器页面...")
-            sb.uc_open_with_reconnect(SERVER_URL, reconnect_time=5)
+            sb.uc_open_with_reconnect(SERVER_URL, reconnect_time=6)
             random_delay(3, 5)
 
-            for i in range(12):
-                if not is_cloudflare(sb):
-                    print("[信息] Cloudflare 已通过")
-                    break
-                print(f"[信息] Cloudflare 验证中... ({i+1}/12)")
-                try:
-                    sb.uc_gui_click_captcha()
-                except Exception as e:
-                    print(f"[调试] captcha: {e}")
-                if i in (3, 7):
+            # 强化过 CF
+            if is_cloudflare(sb):
+                print("[信息] 检测到 Cloudflare，开始处理 Turnstile...")
+                ok = solve_turnstile(sb, timeout=80)
+                if not ok:
+                    print("[信息] 首次未过，重连后再试...")
                     try:
-                        sb.uc_open_with_reconnect(SERVER_URL, reconnect_time=4)
-                    except Exception:
-                        pass
-                time.sleep(4)
-            else:
-                print("[警告] Cloudflare 可能仍未通过")
+                        sb.uc_open_with_reconnect(SERVER_URL, reconnect_time=5)
+                        random_delay(3, 4)
+                        ok = solve_turnstile(sb, timeout=60)
+                    except Exception as e:
+                        print(f"[调试] 重连失败: {e}")
+                if ok:
+                    print("[信息] Cloudflare / Turnstile 已通过")
+                else:
+                    print("[警告] Turnstile 仍可能未通过")
 
             random_delay(2, 3)
             try:
@@ -161,9 +284,12 @@ def main():
 
             if is_cloudflare(sb):
                 sb.save_screenshot("cf_blocked.png")
-                print("❌ 仍被 Cloudflare 拦截，检查节点是否可用")
+                print("❌ 仍被 Cloudflare 拦截")
+                print("   当前节点是机房 IP，CF 可能持续出验证码。")
+                print("   建议换住宅代理 / 更干净的节点后再试。")
                 sys.exit(4)
 
+            # 点击唤醒
             clicked = False
             for text in WAKE_BUTTON_TEXTS:
                 xpath = f"//button[contains(normalize-space(.), '{text}')]"

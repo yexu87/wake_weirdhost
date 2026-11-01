@@ -28,19 +28,49 @@ jobs:
           python -m pip install --upgrade pip
           pip install seleniumbase requests aiohttp
 
-      - name: 设置代理 (sing-box)
+      - name: 设置代理 (Mihomo / GLaDOS SS)
         continue-on-error: true
-        env:
-          # Secrets 优先；没有则用下面默认节点
-          NODE_LINK: ${{ secrets.NODE_LINK }}
         run: |
-          if [ -z "$NODE_LINK" ]; then
-            export NODE_LINK='hysteria2://e707059e-ba73-4d5e-9880-abc140e0f5ca@95.217.148.96:25873?sni=www.bing.com&insecure=1&allowInsecure=1#MYBOT'
-            echo "[信息] 使用代码内置 Hysteria2 节点"
-          else
-            echo "[信息] 使用 Secrets 中的 NODE_LINK"
-          fi
-          bash <(wget -qO- https://main.ssss.nyc.mn/setup_proxy.sh)
+          set -e
+          ARCH=amd64
+          VER=$(curl -sL https://api.github.com/repos/MetaCubeX/mihomo/releases/latest | jq -r .tag_name)
+          echo "[信息] Mihomo 版本: ${VER}"
+          wget -qO mihomo.gz "https://github.com/MetaCubeX/mihomo/releases/download/${VER}/mihomo-linux-${ARCH}-${VER}.gz"
+          gunzip -c mihomo.gz > mihomo
+          chmod +x mihomo
+
+          cat > mihomo-config.yaml << 'EOF'
+          mixed-port: 7890
+          allow-lan: false
+          mode: global
+          log-level: info
+          proxies:
+            - name: JP-Fixed-01
+              type: ss
+              server: 51d8a73.e1.glados-config.com
+              port: 2377
+              udp: true
+              cipher: chacha20-ietf-poly1305
+              password: "t0srmdxrm3xyjnvqz9ewlxb2myq7rjuv"
+              plugin: obfs
+              plugin-opts:
+                mode: tls
+                host: 51d8a73.46prnbyjdpgp5ogf6uuci5xawy.fastly.net:295614
+          proxy-groups:
+            - name: PROXY
+              type: select
+              proxies:
+                - JP-Fixed-01
+          rules:
+            - MATCH,PROXY
+          EOF
+
+          ./mihomo -d . -f mihomo-config.yaml > mihomo.log 2>&1 &
+          sleep 4
+          echo "IS_PROXY=true" >> $GITHUB_ENV
+          echo "PROXY_SERVER=http://127.0.0.1:7890" >> $GITHUB_ENV
+          echo "[信息] Mihomo 已启动 -> http://127.0.0.1:7890"
+          head -n 30 mihomo.log || true
 
       - name: 运行唤醒脚本
         env:
@@ -57,8 +87,9 @@ jobs:
       - name: 清理
         if: always()
         run: |
+          pkill -f mihomo || true
           pkill -f sing-box || true
           pkill -f chromedriver || true
           pkill -f chrome || true
           pkill -f Xvfb || true
-          rm -f sing-box sing-box-config.json sing-box.log || true
+          rm -f mihomo mihomo.gz mihomo-config.yaml mihomo.log sing-box sing-box-config.json sing-box.log || true
